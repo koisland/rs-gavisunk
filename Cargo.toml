@@ -1,0 +1,18 @@
+[package]
+name = "rs-gavisunk"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+clap = { version = "4.5.20", features = ["derive"] }
+coitrees = "0.4.0"
+eyre = "0.6.12"
+itertools = "0.13.0"
+kmers = "0.2.2"
+log = "0.4.22"
+noodles = { version = "0.85.0", features = ["fasta", "bgzf", "core"] }
+petgraph = "0.6.5"
+rayon = "1.10.0"
+simple_logger = { version = "5.0.0", features = ["stderr"] }

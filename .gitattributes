@@ -1,0 +1,4 @@
+test/input/all.bed filter=lfs diff=lfs merge=lfs -text
+test/input/all.fa filter=lfs diff=lfs merge=lfs -text
+test/input/all_ONT.fa filter=lfs diff=lfs merge=lfs -text
+test/expected/AMY_HG02723_sunk.loc filter=lfs diff=lfs merge=lfs -text
