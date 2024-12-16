@@ -1,47 +1,47 @@
 use core::str;
-use std::collections::{HashMap, HashSet};
+use std::{collections::{HashMap, HashSet}, fs::File};
 
 use io::Fasta;
-use itertools::Itertools;
 use kmers::{self, Kmer};
+use polars::prelude::*;
 use rayon::prelude::*;
 
 mod io;
 
-pub type KmerPositions = HashMap<String, HashMap<Kmer, Vec<usize>>>;
-
-/// Extract all k-mers positions from a given sequence. 
-/// * Mimic behavior of jellyfish in counting canonical kmers
+/// Extract all k-mers counts and starting positions from a given sequence.
+/// * Mimic behavior of jellyfish in counting canonical kmers.
 ///     * `jellyfish -C -m kmer_size`
 ///     * https://www.genome.umd.edu/docs/JellyfishUserGuide.pdf
 ///         * 1.1.1 Counting k-mers in sequencing reads
-fn get_kmer_indices(
+fn get_kmer_counts_pos(
     fasta: &str,
     name: &str,
     len: u64,
     kmer_size: usize,
-) -> eyre::Result<HashMap<Kmer, Vec<usize>>> {
+) -> eyre::Result<HashMap<Kmer, (usize, usize)>> {
     let mut fh = Fasta::new(fasta)?;
     let rec = fh.fetch(name, 1, len.try_into()?)?;
-    let mut indices: HashMap<Kmer, Vec<usize>> = HashMap::new();
+    let mut indices: HashMap<Kmer, (usize, usize)> = HashMap::new();
+    // Get both fwd and revcomp kmers.
+    // Keep track of count and first occurence.
     Kmer::with_many_both_pos(kmer_size, rec.sequence(), |pos, x, y| {
         indices
             .entry(x.clone())
-            .or_insert_with(Vec::new)
-            .push(pos + 1 - kmer_size);
+            .and_modify(|(cnt, _)| *cnt += 1)
+            .or_insert((1, pos + 1 - kmer_size));
         indices
             .entry(y.clone())
-            .or_insert_with(Vec::new)
-            .push(pos + 1 - kmer_size);
+            .and_modify(|(cnt, _)| *cnt += 1)
+            .or_insert((1, pos + 1 - kmer_size));
     });
     Ok(indices)
 }
 
-fn get_kmer_positions(
-    fasta: Fasta,
-    kmer_size: usize,
-    kmer_cnt: usize,
-) -> eyre::Result<KmerPositions> {
+/// Get singlely unique kmers in the give fasta file of `kmer_size`.
+/// * `fasta` - Fasta file handle.
+/// * `kmer_size` - kmer size.
+/// * `canonical` - Get canonical kmers (Both fwd + revcomp only count as 1).
+fn get_sunk_positions(fasta: Fasta, kmer_size: usize, canonical: bool) -> eyre::Result<DataFrame> {
     let all_seq_lens: Vec<(String, u64)> = fasta
         .index
         .as_ref()
@@ -53,65 +53,88 @@ fn get_kmer_positions(
             )
         })
         .collect();
-    let mut all_kmer_indices: HashMap<String, HashMap<Kmer, Vec<usize>>> = all_seq_lens
+    let mut all_kmer_indices: HashMap<String, HashMap<Kmer, (usize, usize)>> = all_seq_lens
         .into_par_iter()
         .map(|(name, len)| {
             let kmer_indices =
-                get_kmer_indices(fasta.fname.to_str().unwrap(), &name, len, kmer_size).unwrap();
+                get_kmer_counts_pos(fasta.fname.to_str().unwrap(), &name, len, kmer_size).unwrap();
             (name, kmer_indices)
         })
         .collect();
-    
+
     // Sum up kmer counts across all sequences.
     let mut kmer_cnts: HashMap<Kmer, usize> =
         all_kmer_indices.values().fold(HashMap::new(), |mut a, b| {
-            for (kmer, pos) in b.iter() {
-                *a.entry(kmer.clone()).or_default() += pos.len()
+            for (kmer, (cnt, _)) in b.iter() {
+                *a.entry(kmer.clone()).or_default() += *cnt
             }
             a
         });
-    kmer_cnts.retain(|_, cnt| *cnt == kmer_cnt);
+    // Only get SUNKs.
+    kmer_cnts.retain(|_, cnt| *cnt == 1);
 
-    for (_, kmers) in all_kmer_indices.iter_mut() {
-        // Filter kmers to ones that have desired count.
+    all_kmer_indices.par_iter_mut().for_each(|(_, kmers)| {
+        // Get kmers that only occur once.
         kmers.retain(|k, _| kmer_cnts.contains_key(k));
-        
-        // TODO: There's probably a better way to do this.
-        let mut keep_list: HashSet<Kmer> = HashSet::new();
-        let mut remove_list: HashSet<Kmer> = HashSet::new();
-        for (kmer, _) in kmers.iter() {
-            // Does this kmer have a revcomp version in the kmers map?
-            // If so, remove it to avoid double counting.
-            let rev_comp_kmer = kmer.rev_comp(kmer_size);
-            if !remove_list.contains(&rev_comp_kmer) && kmers.contains_key(&rev_comp_kmer) && !keep_list.contains(&rev_comp_kmer) {
-                keep_list.insert(kmer.clone());
-                remove_list.insert(rev_comp_kmer);
+
+        if canonical {
+            // TODO: There's probably a better way to do this.
+            let mut keep_list: HashSet<Kmer> = HashSet::new();
+            let mut remove_list: HashSet<Kmer> = HashSet::new();
+            for (kmer, _) in kmers.iter() {
+                // Does this kmer have a revcomp version in the kmers map?
+                // If so, remove it to avoid double counting.
+                let rev_comp_kmer = kmer.rev_comp(kmer_size);
+                if !remove_list.contains(&rev_comp_kmer)
+                    && kmers.contains_key(&rev_comp_kmer)
+                    && !keep_list.contains(&rev_comp_kmer)
+                {
+                    keep_list.insert(kmer.clone());
+                    remove_list.insert(rev_comp_kmer);
+                }
             }
+            // Remove kmers that have a revcomp.
+            kmers.retain(|k, _| keep_list.contains(k));
         }
-        // Remove kmers that have a revcomp.
-        kmers.retain(|k, _| !remove_list.contains(k));
+    });
+
+    let mut seqs = vec![];
+    let mut kmers = vec![];
+    let mut starts = vec![];
+    for (name, kmer_cnts) in all_kmer_indices {
+        for (kmer, (_, pos)) in kmer_cnts {
+            seqs.push(name.clone());
+            kmers.push(kmer.render(kmer_size));
+            starts.push(pos as u64);
+        }
     }
-    Ok(all_kmer_indices)
+    let df_sunks: DataFrame = DataFrame::new(vec![
+        Column::new("name".into(), seqs),
+        Column::new("start".into(), starts),
+        Column::new("kmer".into(), kmers),
+    ])?;
+
+    df_sunks.lazy()
+        .sort(["name", "start"], Default::default())
+        .with_column(
+            (col("start")
+            .shift_and_fill(lit(-1), 0) - col("start"))
+            .rle_id()
+            .alias("group")
+        )
+        .collect()
+        .map_err(|err| eyre::ErrReport::msg(err))
 }
 
 fn main() -> eyre::Result<()> {
     let kmer_size = 20;
     let fh = Fasta::new("test/input/all.fa")?;
-    let sunks = get_kmer_positions(fh, kmer_size, 1)?;
-    let mut n_kmers = 0;
-    for (seq_name, kmer_positions) in sunks.iter() {
-        for (kmer, positions) in kmer_positions
-            .iter()
-            .sorted_by(|a, b| a.1.first().cmp(&b.1.first()))
-        {
-            // TODO: Keep track of id here.
-            let kmer_seq = kmer.render(kmer_size);
-            for pos in positions {
-                // println!("{seq_name}\t{pos}\t{kmer_seq}\t",)
-            }
-            n_kmers += 1;
-        }
-    }
-    println!("{n_kmers}");
+    let mut df_sunks = get_sunk_positions(fh, kmer_size, true)?;
+    
+    let mut file = File::create("example.csv").expect("could not create file");
+    CsvWriter::new(&mut file)
+        .include_header(true)
+        .with_separator(b',')
+        .finish(&mut df_sunks)?;
     Ok(())
 }

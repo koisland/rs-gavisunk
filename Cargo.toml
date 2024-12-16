@@ -14,5 +14,6 @@ kmers = "0.2.2"
 log = "0.4.22"
 noodles = { version = "0.85.0", features = ["fasta", "bgzf", "core"] }
 petgraph = "0.6.5"
+polars = { version = "0.45.1", features = ["csv", "lazy", "rle"] }
 rayon = "1.10.0"
 simple_logger = { version = "5.0.0", features = ["stderr"] }
