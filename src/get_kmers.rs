@@ -138,6 +138,7 @@ pub fn get_sunk_positions(fasta: Fasta, kmer_size: usize, canonical: bool) -> ey
                 .over(["name"])
                 .alias("group"),
         )
+        // Set group number to be the first position in adjacent sunks.
         .with_column(col("start").first().over(["name", "group"]).alias("group"))
         .collect()
         .map_err(|err| eyre::ErrReport::msg(err))
