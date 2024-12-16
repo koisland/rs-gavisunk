@@ -1,5 +1,8 @@
 use core::str;
-use std::{collections::{HashMap, HashSet}, fs::File};
+use std::{
+    collections::{HashMap, HashSet},
+    fs::File,
+};
 
 use io::Fasta;
 use kmers::{self, Kmer};
@@ -114,14 +117,32 @@ fn get_sunk_positions(fasta: Fasta, kmer_size: usize, canonical: bool) -> eyre::
         Column::new("kmer".into(), kmers),
     ])?;
 
-    df_sunks.lazy()
+    df_sunks
+        .lazy()
         .sort(["name", "start"], Default::default())
         .with_column(
-            (col("start")
-            .shift_and_fill(lit(-1), 0) - col("start"))
-            .rle_id()
-            .alias("group")
+            // Calculate run-length encoding to group values.
+            (col("start") - col("start").shift_and_fill(lit(1), lit(0)))
+                .rle_id()
+                .over(["name"])
+                .alias("group"),
         )
+        .with_column(
+            // grp:     0  0  0 1 2
+            // pos:     1 ... 5 9 10
+            // grp_new: 1  1  1 3 3
+            // Check if group num is 0 due to shift.
+            when(col("group").eq(lit(0)))
+                .then(lit(1))
+                // Check if group num is even.
+                .when((col("group") % lit(2)).eq(lit(0)))
+                // Even values are on edge of position transition
+                .then(col("group") + lit(1))
+                .otherwise(col("group"))
+                .over(["name"])
+                .alias("group"),
+        )
+        .with_column(col("start").first().over(["name", "group"]).alias("group"))
         .collect()
         .map_err(|err| eyre::ErrReport::msg(err))
 }
@@ -130,11 +151,10 @@ fn main() -> eyre::Result<()> {
     let kmer_size = 20;
     let fh = Fasta::new("test/input/all.fa")?;
     let mut df_sunks = get_sunk_positions(fh, kmer_size, true)?;
-    
-    let mut file = File::create("example.csv").expect("could not create file");
+    let mut file = File::create("sunks.tsv").expect("could not create file");
     CsvWriter::new(&mut file)
         .include_header(true)
-        .with_separator(b',')
+        .with_separator(b'\t')
         .finish(&mut df_sunks)?;
     Ok(())
 }
