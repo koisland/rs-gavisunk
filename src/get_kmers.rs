@@ -6,7 +6,6 @@ use kmers::{self, Kmer};
 use polars::prelude::*;
 use rayon::prelude::*;
 
-
 /// Extract all k-mers counts and starting positions from a given sequence.
 /// * Mimic behavior of jellyfish in counting canonical kmers.
 ///     * `jellyfish -C -m kmer_size`
@@ -40,18 +39,12 @@ pub fn get_kmer_counts_pos(
 /// * `fasta` - Fasta file handle.
 /// * `kmer_size` - kmer size.
 /// * `canonical` - Get canonical kmers (Both fwd + revcomp only count as 1).
-pub fn get_sunk_positions(fasta: Fasta, kmer_size: usize, canonical: bool) -> eyre::Result<DataFrame> {
-    let all_seq_lens: Vec<(String, u64)> = fasta
-        .index
-        .as_ref()
-        .iter()
-        .map(|rec| {
-            (
-                String::from_utf8(rec.name().to_vec()).unwrap(),
-                rec.length(),
-            )
-        })
-        .collect();
+pub fn get_sunk_positions(
+    fasta: Fasta,
+    kmer_size: usize,
+    canonical: bool,
+) -> eyre::Result<DataFrame> {
+    let all_seq_lens: Vec<(String, u64)> = fasta.lengths();
     let mut all_kmer_indices: HashMap<String, HashMap<Kmer, (usize, usize)>> = all_seq_lens
         .into_par_iter()
         .map(|(name, len)| {

@@ -83,7 +83,7 @@ pub enum FastaReader {
 pub struct Fasta {
     pub fname: PathBuf,
     reader: FastaReader,
-    pub index: fasta::fai::Index,
+    index: fasta::fai::Index,
 }
 
 impl Fasta {
@@ -96,6 +96,19 @@ impl Fasta {
             reader: fh,
             index,
         })
+    }
+
+    pub fn lengths(&self) -> Vec<(String, u64)> {
+        self.index
+            .as_ref()
+            .iter()
+            .map(|rec| {
+                (
+                    String::from_utf8(rec.name().to_vec()).unwrap(),
+                    rec.length(),
+                )
+            })
+            .collect()
     }
 
     fn get_faidx(

@@ -16,3 +16,6 @@ Unnecessary/slow steps in original implementation.
 cargo build --release
 ./target/release/rs-gavisunk
 ```
+
+### TODO
+* Benchmark and validate against bowtie and bwa mem.
