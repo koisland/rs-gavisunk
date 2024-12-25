@@ -26,11 +26,11 @@ pub fn get_kmer_counts_pos(
         indices
             .entry(x.clone())
             .and_modify(|(cnt, _)| *cnt += 1)
-            .or_insert((1, pos + 1 - kmer_size));
+            .or_insert((1, pos));
         indices
             .entry(y.clone())
             .and_modify(|(cnt, _)| *cnt += 1)
-            .or_insert((1, pos + 1 - kmer_size));
+            .or_insert((1, pos));
     });
     Ok(indices)
 }
@@ -112,6 +112,7 @@ pub fn get_sunk_positions(
         .with_column(
             // Calculate run-length encoding to group values.
             (col("start") - col("start").shift_and_fill(lit(1), lit(0)))
+                .gt(lit(1))
                 .rle_id()
                 .over(["name"])
                 .alias("group"),

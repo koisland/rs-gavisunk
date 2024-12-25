@@ -23,11 +23,11 @@ fn map_sunks_to_seq<'a, 'b>(
     };
 
     let mut idx = SimplePosIndex::new(kmer_size);
-    idx.add_seq(seq);
+    idx.add_seq_both(seq);
 
     for sunk in sunks {
         for pos in idx.find(&Kmer::make(&sunk).unwrap()) {
-            mtches.push((ctg, *sunk, *pos - kmer_size + 1));
+            mtches.push((ctg, *sunk, *pos));
         }
     }
     Ok(mtches)
@@ -37,7 +37,7 @@ pub fn map_sunks_to_seqs(fa: Fasta, df_sunks: &DataFrame) -> eyre::Result<DataFr
     let lengths = fa.lengths();
     log::info!("Total number of reads: {}", lengths.len());
 
-    let col_sunks = df_sunks.column("kmer")?.unique()?;
+    let col_sunks = df_sunks.column("kmer")?;
     let sunks: Vec<&str> = col_sunks.str()?.into_iter().flatten().collect();
     log::info!("Total number of SUNKs to map: {}", sunks.len());
 
@@ -51,21 +51,39 @@ pub fn map_sunks_to_seqs(fa: Fasta, df_sunks: &DataFrame) -> eyre::Result<DataFr
         .into_iter()
         .collect();
 
-    log::info!("Total SUNKs mapped: {}", mapped_sunks.len());
 
-    let mut ctgs = vec![];
+    let mut seqs = vec![];
     let mut kmers = vec![];
     let mut positions = vec![];
-    for (ctg, kmer, pos) in mapped_sunks.into_iter() {
-        ctgs.push(ctg);
+    for (seq, kmer, pos) in mapped_sunks.into_iter() {
+        seqs.push(seq);
         kmers.push(kmer);
         positions.push(pos as u64);
     }
 
-    DataFrame::new(vec![
-        Column::new("ctg".into(), ctgs),
+    let df_final = DataFrame::new(vec![
+        Column::new("seq".into(), seqs),
         Column::new("kmer".into(), kmers),
         Column::new("pos".into(), positions),
+    ])?
+    .join(df_sunks, ["kmer"], ["kmer"], JoinArgs::new(JoinType::Left))?
+    .lazy()
+    .group_by([col("seq"), col("name"), col("group")])
+    .agg([
+        col("start").first(),
+        col("pos").sort_by(["start"], Default::default()).first()
     ])
-    .map_err(|err| eyre::ErrReport::msg(err))
+    .select([
+        col("seq"),
+        col("pos"),
+        col("name"),
+        col("start"),
+        col("group"),
+    ])
+    .sort(["seq"], Default::default())
+    .collect()?;
+
+    log::info!("Total SUNKs mapped: {}", df_final.shape().0);
+
+    Ok(df_final)
 }
