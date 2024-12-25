@@ -1,4 +1,5 @@
-use memchr::memmem;
+use eyre::bail;
+use kmers::{self, Kmer, SimplePosIndex};
 use std::path::PathBuf;
 
 use crate::io::Fasta;
@@ -16,9 +17,17 @@ fn map_sunks_to_seq<'a, 'b>(
     let rec = fasta.fetch(ctg, start, end)?;
     let seq = rec.sequence();
     let mut mtches = vec![];
+
+    let Some(kmer_size) = sunks.first().map(|k| k.len()) else {
+        bail!("No SUNKs given.")
+    };
+
+    let mut idx = SimplePosIndex::new(kmer_size);
+    idx.add_seq(seq);
+
     for sunk in sunks {
-        for mtch in memmem::find_iter(seq.as_ref(), sunk) {
-            mtches.push((ctg, *sunk, mtch));
+        for pos in idx.find(&Kmer::make(&sunk).unwrap()) {
+            mtches.push((ctg, *sunk, *pos - kmer_size + 1));
         }
     }
     Ok(mtches)

@@ -1833,7 +1833,6 @@ dependencies = [
  "itertools",
  "kmers",
  "log",
- "memchr",
  "noodles",
  "petgraph",
  "polars",
