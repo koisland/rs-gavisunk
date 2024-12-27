@@ -1,4 +1,4 @@
-use std::fs::File;
+use std::{fs::File, path::Path};
 
 use assign_read_ctg::assign_read_to_ctg_w_ort;
 use get_kmers::get_sunk_positions;
@@ -8,6 +8,7 @@ use polars::prelude::*;
 
 mod assign_read_ctg;
 mod get_kmers;
+#[macro_use]
 mod io;
 mod map_kmers;
 
@@ -21,29 +22,22 @@ fn main() -> eyre::Result<()> {
     let ont_fh = Fasta::new("test/input/all_ONT.fa")?;
 
     log::info!("Getting SUNK positions in assembly.");
-    let mut df_asm_sunks = get_sunk_positions(asm_fh, kmer_size, true)?;
-    let mut file_sunks_asm = File::create("asm_sunks.tsv")?;
+    let path_sunks_asm = Path::new("asm_sunks.tsv");
+    let df_asm_sunks =
+        load_or_redo_df!(path_sunks_asm, get_sunk_positions(asm_fh, kmer_size, true)?);
 
     log::info!("Mapping assembly SUNKs to reads.");
-    let mut df_read_sunks = map_sunks_to_reads(ont_fh, &df_asm_sunks)?;
-    let mut file_sunks_reads = File::create("read_sunks.tsv")?;
+    let path_sunks_reads = Path::new("read_sunks.tsv");
+    let df_read_sunks =
+        load_or_redo_df!(path_sunks_reads, map_sunks_to_reads(ont_fh, &df_asm_sunks)?);
 
     log::info!("Assigning reads to assembly contigs.");
-    let mut df_best_reads_asm = assign_read_to_ctg_w_ort(&df_read_sunks, None, None)?;
-    let mut file_best_reads_asm = File::create("read_ctg_mapping.tsv")?;
+    let path_best_reads_asm = Path::new("read_ctg_mapping.tsv");
+    let df_best_reads_asm = load_or_redo_df!(
+        path_best_reads_asm,
+        assign_read_to_ctg_w_ort(&df_read_sunks, None, None)?
+    );
 
-    CsvWriter::new(&mut file_sunks_asm)
-        .include_header(true)
-        .with_separator(b'\t')
-        .finish(&mut df_asm_sunks)?;
-    CsvWriter::new(&mut file_sunks_reads)
-        .include_header(true)
-        .with_separator(b'\t')
-        .finish(&mut df_read_sunks)?;
-    CsvWriter::new(&mut file_best_reads_asm)
-        .include_header(true)
-        .with_separator(b'\t')
-        .finish(&mut df_best_reads_asm)?;
-
+    log::info!("Done.");
     Ok(())
 }

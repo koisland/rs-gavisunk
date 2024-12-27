@@ -176,3 +176,33 @@ impl Fasta {
         }
     }
 }
+
+/// Loads the given file if it exists. If not, then redoes function call.
+///
+/// # Arguments
+/// * `path`
+///     * File path to TSV with header.
+/// * `fn_call`
+///     * Expression that generates a [`DataFrame`].
+///     * This will be written to `path`.
+/// # Returns
+/// * [`DataFrame`]
+macro_rules! load_or_redo_df {
+    ($path:ident, $fn_call:expr) => {
+        if $path.exists() {
+            log::info!("Loading existing file: {:?}", $path);
+            CsvReadOptions::default()
+                .with_has_header(true)
+                .try_into_reader_with_file_path(Some($path.into()))?
+                .finish()?
+        } else {
+            let mut df = $fn_call;
+            let mut file = File::create($path)?;
+            CsvWriter::new(&mut file)
+                .include_header(true)
+                .with_separator(b'\t')
+                .finish(&mut df)?;
+            df
+        }
+    };
+}
