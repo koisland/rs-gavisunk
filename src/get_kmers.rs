@@ -11,6 +11,19 @@ use rayon::prelude::*;
 ///     * `jellyfish -C -m kmer_size`
 ///     * https://www.genome.umd.edu/docs/JellyfishUserGuide.pdf
 ///         * 1.1.1 Counting k-mers in sequencing reads
+///
+/// # Arguments
+/// * `fasta`
+///     * Fasta file handle
+/// * `name`
+///     * Name of sequence.
+/// * `len`
+///     * Length of sequence.
+/// * `kmer_size`
+///     * kmer size.
+///
+/// # Returns
+/// * Map of kmers with the their count and first encountered position.
 pub fn get_kmer_counts_pos(
     fasta: &str,
     name: &str,
@@ -26,19 +39,27 @@ pub fn get_kmer_counts_pos(
         indices
             .entry(x.clone())
             .and_modify(|(cnt, _)| *cnt += 1)
-            .or_insert((1, pos));
+            .or_insert((1, pos + 1));
         indices
             .entry(y.clone())
             .and_modify(|(cnt, _)| *cnt += 1)
-            .or_insert((1, pos));
+            .or_insert((1, pos + 1));
     });
     Ok(indices)
 }
 
 /// Get singlely unique kmers in the give fasta file of `kmer_size`.
-/// * `fasta` - Fasta file handle.
-/// * `kmer_size` - kmer size.
-/// * `canonical` - Get canonical kmers (Both fwd + revcomp only count as 1).
+///
+/// # Arguments
+/// * `fasta`
+///     * Fasta file handle.
+/// * `kmer_size`
+///     * kmer size.
+/// * `canonical`
+///     * Get canonical kmers (Both fwd + revcomp only count as 1).
+///
+/// # Returns
+/// * [`DataFrame`] of SUNK positions with columns `[name, start, kmer, group]`.
 pub fn get_sunk_positions(
     fasta: Fasta,
     kmer_size: usize,
@@ -90,31 +111,31 @@ pub fn get_sunk_positions(
         }
     });
 
-    let mut seqs = vec![];
+    let mut ctgs = vec![];
     let mut kmers = vec![];
-    let mut starts = vec![];
+    let mut positions = vec![];
     for (name, kmer_cnts) in all_kmer_indices {
         for (kmer, (_, pos)) in kmer_cnts {
-            seqs.push(name.clone());
+            ctgs.push(name.clone());
             kmers.push(kmer.render(kmer_size));
-            starts.push(pos as u64);
+            positions.push(pos as u64);
         }
     }
     let df_sunks: DataFrame = DataFrame::new(vec![
-        Column::new("name".into(), seqs),
-        Column::new("start".into(), starts),
+        Column::new("ctg".into(), ctgs),
+        Column::new("cpos".into(), positions),
         Column::new("kmer".into(), kmers),
     ])?;
 
-    df_sunks
+    let df_sunks_final = df_sunks
         .lazy()
-        .sort(["name", "start"], Default::default())
+        .sort(["ctg", "cpos"], Default::default())
         .with_column(
             // Calculate run-length encoding to group values.
-            (col("start") - col("start").shift_and_fill(lit(1), lit(0)))
+            (col("cpos") - col("cpos").shift_and_fill(lit(1), lit(0)))
                 .gt(lit(1))
                 .rle_id()
-                .over(["name"])
+                .over(["ctg"])
                 .alias("group"),
         )
         .with_column(
@@ -129,11 +150,13 @@ pub fn get_sunk_positions(
                 // Even values are on edge of position transition
                 .then(col("group") + lit(1))
                 .otherwise(col("group"))
-                .over(["name"])
+                .over(["ctg"])
                 .alias("group"),
         )
         // Set group number to be the first position in adjacent sunks.
-        .with_column(col("start").first().over(["name", "group"]).alias("group"))
-        .collect()
-        .map_err(|err| eyre::ErrReport::msg(err))
+        .with_column(col("cpos").first().over(["ctg", "group"]).alias("group"))
+        .collect()?;
+
+    log::info!("Total number of SUNKs: {}", df_sunks_final.shape().0);
+    Ok(df_sunks_final)
 }
