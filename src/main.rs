@@ -1,15 +1,16 @@
-use std::{fs::File, path::Path};
+use std::path::Path;
 
 use assign_read_ctg::assign_read_to_ctg_w_ort;
+use filter_bad_sunks::filter_bad_sunks;
 use get_kmers::get_sunk_positions;
-use io::Fasta;
+use io::{load_tsv, write_tsv, Fasta};
 use map_kmers::{get_good_read_sunks, map_sunks_to_reads};
-use polars::prelude::*;
 
 mod assign_read_ctg;
 mod get_kmers;
 #[macro_use]
 mod io;
+mod filter_bad_sunks;
 mod map_kmers;
 
 fn main() -> eyre::Result<()> {
@@ -23,8 +24,7 @@ fn main() -> eyre::Result<()> {
 
     log::info!("Getting SUNK positions in assembly.");
     let path_sunks_asm = Path::new("asm_sunks.tsv");
-    let df_asm_sunks =
-        load_or_redo_df!(path_sunks_asm, get_sunk_positions(asm_fh, kmer_size)?);
+    let df_asm_sunks = load_or_redo_df!(path_sunks_asm, get_sunk_positions(asm_fh, kmer_size)?);
 
     log::info!("Mapping assembly SUNKs to reads.");
     let path_sunks_reads = Path::new("read_sunks.tsv");
@@ -44,6 +44,11 @@ fn main() -> eyre::Result<()> {
         path_good_sunks_reads,
         get_good_read_sunks(&df_read_sunks, &df_best_reads_asm)?
     );
+
+    // TODO: Filter bad sunks
+    filter_bad_sunks(df_good_sunks_reads);
+
+    // TODO: Process by contig
 
     log::info!("Done.");
     Ok(())

@@ -13,6 +13,7 @@ use noodles::{
     bgzf::{self, IndexedReader},
     fasta::{self},
 };
+use polars::prelude::*;
 
 pub type RegionIntervals<T> = HashMap<String, Vec<Interval<T>>>;
 pub type RegionIntervalTrees<T> = HashMap<String, COITree<T, usize>>;
@@ -177,6 +178,23 @@ impl Fasta {
     }
 }
 
+pub fn write_tsv(df: &mut DataFrame, path: impl AsRef<Path>) -> eyre::Result<()> {
+    let mut file = File::create(path)?;
+    CsvWriter::new(&mut file)
+        .include_header(true)
+        .with_separator(b'\t')
+        .finish(df)?;
+    Ok(())
+}
+
+pub fn load_tsv(path: impl AsRef<Path>) -> eyre::Result<DataFrame> {
+    Ok(CsvReadOptions::default()
+        .with_has_header(true)
+        .with_parse_options(CsvParseOptions::default().with_separator(b'\t'))
+        .try_into_reader_with_file_path(Some(PathBuf::from(path.as_ref())))?
+        .finish()?)
+}
+
 /// Loads the given file if it exists. If not, then redoes function call.
 ///
 /// # Arguments
@@ -191,18 +209,10 @@ macro_rules! load_or_redo_df {
     ($path:ident, $fn_call:expr) => {
         if $path.exists() {
             log::info!("Loading existing file: {:?}", $path);
-            CsvReadOptions::default()
-                .with_has_header(true)
-                .with_parse_options(CsvParseOptions::default().with_separator(b'\t'))
-                .try_into_reader_with_file_path(Some($path.into()))?
-                .finish()?
+            load_tsv($path)?
         } else {
             let mut df = $fn_call;
-            let mut file = File::create($path)?;
-            CsvWriter::new(&mut file)
-                .include_header(true)
-                .with_separator(b'\t')
-                .finish(&mut df)?;
+            write_tsv(&mut df, $path)?;
             df
         }
     };

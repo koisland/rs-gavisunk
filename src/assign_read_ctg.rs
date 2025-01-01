@@ -35,26 +35,48 @@ pub fn assign_read_to_ctg_w_ort(
     log::info!("Using median SUNK bandwidth: {bandwidth}");
     log::info!("Requiring a read to have at least {good_sunk_threshold} SUNK(s) within bandwidth.");
 
+    let lf_ort = df_read_sunk_pos
+        .select(["read", "ctg", "cpos", "rpos"])?
+        .lazy()
+        // Filter reads with only sunk over read and chrom.
+        .filter(col("read").len().over(["read", "ctg"]).gt(lit(1)))
+        .group_by(["read", "ctg"])
+        .agg([
+            // Calculate a 1D gradient to get direction of sunks in chrom.
+            // ex. [1, 3, 6, 7] => [ 2,  3,  1] => mean is 2 => + (ascending)
+            // ex. [9, 7, 3, 1] => [ -2, -4, -2] => mean is -2.67  => - (descending)
+            //
+            // Similar to np.gradient but without resulting same length vec.
+            // * See here for more https://stackoverflow.com/a/24633888
+            (col("cpos") - col("cpos").shift(lit(1)))
+                .drop_nulls()
+                .mean()
+                .gt(lit(0))
+                .alias("cort"),
+            (col("rpos") - col("rpos").shift(lit(1)))
+                .drop_nulls()
+                .mean()
+                .gt(lit(0))
+                .alias("rort"),
+        ])
+        .with_column(
+            // Final read ort
+            // Both directions equal, read is + ort. Otherwise, - ort.
+            when(col("rort").and(col("cort")))
+                .then(lit("+"))
+                .otherwise(lit("-"))
+                .alias("ort"),
+        );
+
     let df = lf_read_sunk_pos
         // Filter reads with only sunk over read and chrom.
         .filter(col("read").len().over(["read", "ctg"]).gt(lit(1)))
-        .with_column(
-            // Calculate a 1D gradient to get direction of sunks in chrom.
-            // ex. [1, 3, 6, 7] => [ 0,  2,  3,  1] => mean is 1.5 => + (ascending)
-            // ex. [9, 7, 3, 1] => [ 0, -2, -4, -2] => mean is -2  => - (descending)
-            //
-            // Similar to np.gradient but without resulting same length vec.
-            // * We fill `null`s with zero which reduces the mean but should not matter.
-            // * See here for more https://stackoverflow.com/a/24633888
-            when(
-                (col("cpos") - col("cpos").shift_and_fill(lit(1), lit(0)))
-                    .mean()
-                    .gt(lit(0)),
-            )
-            .then(lit("+"))
-            .otherwise(lit("-"))
-            .over(["read", "ctg"])
-            .alias("ort"),
+        // Add orientation.
+        .join(
+            lf_ort.lazy(),
+            [col("read"), col("ctg")],
+            [col("read"), col("ctg")],
+            JoinArgs::new(JoinType::Left),
         )
         // Calculate adjusted start position of SUNK based on orientation.
         // n = sunk start position
