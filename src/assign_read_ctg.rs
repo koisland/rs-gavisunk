@@ -38,8 +38,7 @@ pub fn assign_read_to_ctg_w_ort(
     let df = lf_read_sunk_pos
         // Filter reads with only sunk over read and chrom.
         .filter(col("read").len().over(["read", "ctg"]).gt(lit(1)))
-        .group_by(["read", "ctg"])
-        .agg([
+        .with_column(
             // Calculate a 1D gradient to get direction of sunks in chrom.
             // ex. [1, 3, 6, 7] => [ 0,  2,  3,  1] => mean is 1.5 => + (ascending)
             // ex. [9, 7, 3, 1] => [ 0, -2, -4, -2] => mean is -2  => - (descending)
@@ -54,16 +53,39 @@ pub fn assign_read_to_ctg_w_ort(
             )
             .then(lit("+"))
             .otherwise(lit("-"))
+            .over(["read", "ctg"])
             .alias("ort"),
-            // Then determine which chrom has sunks closest to median position.
-            (col("rpos") - col("rpos").median())
+        )
+        // Calculate adjusted start position of SUNK based on orientation.
+        // n = sunk start position
+        // >/< = coord bounds and orientation.
+        // n* = adjusted start position of SUNK within ctg
+        //                 2*
+        // fwd: (read)  >    4 >
+        //      (ctg)   >      6   >
+        //                       7*
+        // rev: (read)  < 1   <
+        //      (ctg)   >      6   >
+        .with_column(
+            when(col("ort").eq(lit("+")))
+                .then(col("cpos") - col("rpos"))
+                .otherwise(col("cpos") + col("rpos"))
+                .alias("apos"),
+        )
+        // Then count sunks valid sunks around median position within bandwidth.
+        .with_column(
+            (col("apos") - col("apos").median())
+                .abs()
                 .lt(bandwidth)
-                .count()
+                .sum()
+                .over(["read", "ctg"])
                 .alias("sunks_within_bandwidth"),
-        ])
-        // Group by column and take first row with the maximum number of sunks within bandwidth centered around median.
+        )
+        // Choose based on maximum number of sunks within bandwidth.
         .filter(
-            col("sunks_within_bandwidth").eq(col("sunks_within_bandwidth").max().over(["read"])),
+            col("sunks_within_bandwidth")
+                .eq(col("sunks_within_bandwidth").max())
+                .over(["read"]),
         )
         .group_by(["read"])
         // Resolve ties by taking just first row.

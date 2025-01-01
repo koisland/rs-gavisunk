@@ -193,6 +193,7 @@ macro_rules! load_or_redo_df {
             log::info!("Loading existing file: {:?}", $path);
             CsvReadOptions::default()
                 .with_has_header(true)
+                .with_parse_options(CsvParseOptions::default().with_separator(b'\t'))
                 .try_into_reader_with_file_path(Some($path.into()))?
                 .finish()?
         } else {

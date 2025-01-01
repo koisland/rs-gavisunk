@@ -3,7 +3,7 @@ use std::{fs::File, path::Path};
 use assign_read_ctg::assign_read_to_ctg_w_ort;
 use get_kmers::get_sunk_positions;
 use io::Fasta;
-use map_kmers::map_sunks_to_reads;
+use map_kmers::{get_good_read_sunks, map_sunks_to_reads};
 use polars::prelude::*;
 
 mod assign_read_ctg;
@@ -36,6 +36,13 @@ fn main() -> eyre::Result<()> {
     let df_best_reads_asm = load_or_redo_df!(
         path_best_reads_asm,
         assign_read_to_ctg_w_ort(&df_read_sunks, None, None)?
+    );
+
+    log::info!("Filtering read SUNKs.");
+    let path_good_sunks_reads = Path::new("read_sunks_good.tsv");
+    let df_good_sunks_reads = load_or_redo_df!(
+        path_good_sunks_reads,
+        get_good_read_sunks(&df_read_sunks, &df_best_reads_asm)?
     );
 
     log::info!("Done.");

@@ -64,9 +64,9 @@ pub fn map_sunks_to_reads(fa: Fasta, df_sunks: &DataFrame) -> eyre::Result<DataF
         .into_iter()
         .collect();
 
-    let mut reads = vec![];
-    let mut kmers = vec![];
-    let mut positions = vec![];
+    let mut reads = Vec::with_capacity(mapped_sunks.len());
+    let mut kmers = Vec::with_capacity(mapped_sunks.len());
+    let mut positions = Vec::with_capacity(mapped_sunks.len());
     for (read, kmer, pos) in mapped_sunks.into_iter() {
         reads.push(read);
         kmers.push(kmer);
@@ -98,4 +98,13 @@ pub fn map_sunks_to_reads(fa: Fasta, df_sunks: &DataFrame) -> eyre::Result<DataF
     log::info!("Total SUNKs mapped: {}", df_final.shape().0);
 
     Ok(df_final)
+}
+
+pub fn get_good_read_sunks(
+    df_read_sunks: &DataFrame,
+    df_best_reads_asm: &DataFrame,
+) -> eyre::Result<DataFrame> {
+    Ok(df_read_sunks
+        .inner_join(df_best_reads_asm, ["read", "ctg"], ["read", "ctg"])?
+        .select(["read", "rpos", "ctg", "cpos", "group"])?)
 }
