@@ -7,10 +7,8 @@ use polars::prelude::*;
 use rayon::prelude::*;
 
 /// Extract all k-mers counts and starting positions from a given sequence.
-/// * Mimic behavior of jellyfish in counting canonical kmers.
-///     * `jellyfish -C -m kmer_size`
+/// * See 1.1.1 Counting k-mers in sequencing reads
 ///     * https://www.genome.umd.edu/docs/JellyfishUserGuide.pdf
-///         * 1.1.1 Counting k-mers in sequencing reads
 ///
 /// # Arguments
 /// * `fasta`
@@ -55,15 +53,11 @@ pub fn get_kmer_counts_pos(
 ///     * Fasta file handle.
 /// * `kmer_size`
 ///     * kmer size.
-/// * `canonical`
-///     * Get canonical kmers (Both fwd + revcomp only count as 1).
-///
 /// # Returns
 /// * [`DataFrame`] of SUNK positions with columns `[name, start, kmer, group]`.
 pub fn get_sunk_positions(
     fasta: Fasta,
     kmer_size: usize,
-    canonical: bool,
 ) -> eyre::Result<DataFrame> {
     let all_seq_lens: Vec<(String, u64)> = fasta.lengths();
     let mut all_kmer_indices: HashMap<String, HashMap<Kmer, (usize, usize)>> = all_seq_lens
@@ -89,26 +83,6 @@ pub fn get_sunk_positions(
     all_kmer_indices.par_iter_mut().for_each(|(_, kmers)| {
         // Get kmers that only occur once.
         kmers.retain(|k, _| kmer_cnts.contains_key(k));
-
-        if canonical {
-            // TODO: There's probably a better way to do this.
-            let mut keep_list: HashSet<Kmer> = HashSet::new();
-            let mut remove_list: HashSet<Kmer> = HashSet::new();
-            for (kmer, _) in kmers.iter() {
-                // Does this kmer have a revcomp version in the kmers map?
-                // If so, remove it to avoid double counting.
-                let rev_comp_kmer = kmer.rev_comp(kmer_size);
-                if !remove_list.contains(&rev_comp_kmer)
-                    && kmers.contains_key(&rev_comp_kmer)
-                    && !keep_list.contains(&rev_comp_kmer)
-                {
-                    keep_list.insert(kmer.clone());
-                    remove_list.insert(rev_comp_kmer);
-                }
-            }
-            // Remove kmers that have a revcomp.
-            kmers.retain(|k, _| keep_list.contains(k));
-        }
     });
 
     let mut ctgs = vec![];

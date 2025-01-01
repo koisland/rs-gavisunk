@@ -24,7 +24,7 @@ fn main() -> eyre::Result<()> {
     log::info!("Getting SUNK positions in assembly.");
     let path_sunks_asm = Path::new("asm_sunks.tsv");
     let df_asm_sunks =
-        load_or_redo_df!(path_sunks_asm, get_sunk_positions(asm_fh, kmer_size, true)?);
+        load_or_redo_df!(path_sunks_asm, get_sunk_positions(asm_fh, kmer_size)?);
 
     log::info!("Mapping assembly SUNKs to reads.");
     let path_sunks_reads = Path::new("read_sunks.tsv");
