@@ -5,6 +5,7 @@ use filter_bad_sunks::filter_bad_sunks;
 use get_kmers::get_sunk_positions;
 use io::{load_tsv, write_tsv, Fasta};
 use map_kmers::{get_good_read_sunks, map_sunks_to_reads};
+use sunk_graph::create_sunk_graph;
 
 mod assign_read_ctg;
 mod get_kmers;
@@ -12,6 +13,7 @@ mod get_kmers;
 mod io;
 mod filter_bad_sunks;
 mod map_kmers;
+mod sunk_graph;
 
 fn main() -> eyre::Result<()> {
     simple_logger::SimpleLogger::new()
@@ -20,16 +22,30 @@ fn main() -> eyre::Result<()> {
 
     let kmer_size = 20;
     let asm_fh = Fasta::new("test/input/all.fa")?;
+    let asm_lens = asm_fh.lengths();
+    log::info!(
+        "Reading {} contigs from {:?}.",
+        asm_lens.len(),
+        asm_fh.fname
+    );
+
     let ont_fh = Fasta::new("test/input/all_ONT.fa")?;
+    let ont_lens = ont_fh.lengths();
+    log::info!("Reading {} reads from {:?}.", ont_lens.len(), ont_fh.fname);
 
     log::info!("Getting SUNK positions in assembly.");
     let path_sunks_asm = Path::new("asm_sunks.tsv");
-    let df_asm_sunks = load_or_redo_df!(path_sunks_asm, get_sunk_positions(asm_fh, kmer_size)?);
+    let df_asm_sunks = load_or_redo_df!(
+        path_sunks_asm,
+        get_sunk_positions(asm_fh, &asm_lens, kmer_size)?
+    );
 
     log::info!("Mapping assembly SUNKs to reads.");
     let path_sunks_reads = Path::new("read_sunks.tsv");
-    let df_read_sunks =
-        load_or_redo_df!(path_sunks_reads, map_sunks_to_reads(ont_fh, &df_asm_sunks)?);
+    let df_read_sunks = load_or_redo_df!(
+        path_sunks_reads,
+        map_sunks_to_reads(ont_fh, &ont_lens, &df_asm_sunks)?
+    );
 
     log::info!("Assigning reads to assembly contigs.");
     let path_best_reads_asm = Path::new("read_ctg_mapping.tsv");
@@ -52,6 +68,13 @@ fn main() -> eyre::Result<()> {
     );
 
     // TODO: Process by contig
+    create_sunk_graph(
+        &df_asm_sunks,
+        &asm_lens,
+        &df_read_sunks,
+        &ont_lens,
+        &df_bad_sunks,
+    )?;
 
     log::info!("Done.");
     Ok(())

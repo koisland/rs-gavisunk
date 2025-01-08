@@ -99,7 +99,7 @@ impl Fasta {
         })
     }
 
-    pub fn lengths(&self) -> Vec<(String, u64)> {
+    pub fn lengths(&self) -> HashMap<String, u64> {
         self.index
             .as_ref()
             .iter()

@@ -1,5 +1,5 @@
 use core::str;
-use std::collections::HashMap;
+use std::{collections::HashMap, ops::Deref};
 
 use super::io::Fasta;
 use kmers::{self, Kmer};
@@ -55,14 +55,17 @@ pub fn get_kmer_counts_pos(
 ///     * kmer size.
 /// # Returns
 /// * [`DataFrame`] of SUNK positions with columns `[name, start, kmer, group]`.
-pub fn get_sunk_positions(fasta: Fasta, kmer_size: usize) -> eyre::Result<DataFrame> {
-    let all_seq_lens: Vec<(String, u64)> = fasta.lengths();
-    let mut all_kmer_indices: HashMap<String, HashMap<Kmer, (usize, usize)>> = all_seq_lens
+pub fn get_sunk_positions(
+    fasta: Fasta,
+    fasta_lens: &HashMap<String, u64>,
+    kmer_size: usize,
+) -> eyre::Result<DataFrame> {
+    let mut all_kmer_indices: HashMap<&str, HashMap<Kmer, (usize, usize)>> = fasta_lens
         .into_par_iter()
         .map(|(name, len)| {
             let kmer_indices =
-                get_kmer_counts_pos(fasta.fname.to_str().unwrap(), &name, len, kmer_size).unwrap();
-            (name, kmer_indices)
+                get_kmer_counts_pos(fasta.fname.to_str().unwrap(), name, *len, kmer_size).unwrap();
+            (name.deref(), kmer_indices)
         })
         .collect();
 
@@ -87,7 +90,7 @@ pub fn get_sunk_positions(fasta: Fasta, kmer_size: usize) -> eyre::Result<DataFr
     let mut positions = vec![];
     for (name, kmer_cnts) in all_kmer_indices {
         for (kmer, (_, pos)) in kmer_cnts {
-            ctgs.push(name.clone());
+            ctgs.push(name);
             kmers.push(kmer.render(kmer_size));
             positions.push(pos as u64);
         }

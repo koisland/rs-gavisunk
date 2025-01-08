@@ -1,6 +1,6 @@
 use eyre::bail;
 use kmers::{self, Kmer, SimplePosIndex};
-use std::path::PathBuf;
+use std::{collections::HashMap, path::PathBuf};
 
 use crate::io::Fasta;
 use polars::prelude::*;
@@ -47,14 +47,15 @@ fn map_sunks_to_seq<'a, 'b>(
 /// # Returns
 /// * [`DataFrame`] of SUNKs within reads from the assembly.
 ///     * With columns `[seq, pos, name, start, group]`
-pub fn map_sunks_to_reads(fa: Fasta, df_sunks: &DataFrame) -> eyre::Result<DataFrame> {
-    let lengths = fa.lengths();
-    log::info!("Found {} reads.", lengths.len());
-
+pub fn map_sunks_to_reads(
+    fa: Fasta,
+    fa_lens: &HashMap<String, u64>,
+    df_sunks: &DataFrame,
+) -> eyre::Result<DataFrame> {
     let col_sunks = df_sunks.column("kmer")?;
     let sunks: Vec<&str> = col_sunks.str()?.into_iter().flatten().collect();
 
-    let mapped_sunks: Vec<(&str, &str, usize)> = lengths
+    let mapped_sunks: Vec<(&str, &str, usize)> = fa_lens
         .par_iter()
         .map(|(seq, len)| map_sunks_to_seq(&sunks, &fa.fname, seq, 1, *len as u32).unwrap())
         .reduce(Vec::new, |mut a, b| {
