@@ -39,14 +39,17 @@ fn main() -> eyre::Result<()> {
     );
 
     log::info!("Filtering read SUNKs.");
+    let path_bad_sunks_reads = Path::new("read_sunks_bad.tsv");
     let path_good_sunks_reads = Path::new("read_sunks_good.tsv");
     let df_good_sunks_reads = load_or_redo_df!(
         path_good_sunks_reads,
         get_good_read_sunks(&df_read_sunks, &df_best_reads_asm)?
     );
-
-    // TODO: Filter bad sunks
-    filter_bad_sunks(df_good_sunks_reads);
+    let df_bad_sunks = load_or_redo_df!(
+        path_bad_sunks_reads,
+        filter_bad_sunks(&df_good_sunks_reads)?,
+        true
+    );
 
     // TODO: Process by contig
 

@@ -203,17 +203,22 @@ pub fn load_tsv(path: impl AsRef<Path>) -> eyre::Result<DataFrame> {
 /// * `fn_call`
 ///     * Expression that generates a [`DataFrame`].
 ///     * This will be written to `path`.
+/// * `force`
+///     * Optional argument to force redoing work even if path exists.
 /// # Returns
 /// * [`DataFrame`]
 macro_rules! load_or_redo_df {
     ($path:ident, $fn_call:expr) => {
-        if $path.exists() {
-            log::info!("Loading existing file: {:?}", $path);
-            load_tsv($path)?
-        } else {
+        load_or_redo_df!($path, $fn_call, false)
+    };
+    ($path:ident, $fn_call:expr, $force:ident) => {
+        if !$path.exists() || $force {
             let mut df = $fn_call;
             write_tsv(&mut df, $path)?;
             df
+        } else {
+            log::info!("Loading existing file: {:?}", $path);
+            load_tsv($path)?
         }
     };
 }
