@@ -63,8 +63,7 @@ fn main() -> eyre::Result<()> {
     );
     let df_bad_sunks = load_or_redo_df!(
         path_bad_sunks_reads,
-        filter_bad_sunks(&df_good_sunks_reads)?,
-        true
+        filter_bad_sunks(&df_good_sunks_reads)?
     );
 
     // TODO: Process by contig

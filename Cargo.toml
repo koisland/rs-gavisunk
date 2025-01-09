@@ -8,12 +8,13 @@ edition = "2021"
 [dependencies]
 clap = { version = "4.5.20", features = ["derive"] }
 coitrees = "0.4.0"
+distmat = "0.3.0"
 eyre = "0.6.12"
 itertools = "0.13.0"
 kmers = "0.2.2"
 log = "0.4.22"
 noodles = { version = "0.85.0", features = ["fasta", "bgzf", "core"] }
 petgraph = "0.6.5"
-polars = { version = "0.45.1", features = ["abs", "csv", "dtype-struct", "lazy", "mode", "rle"] }
+polars = { version = "0.45.1", features = ["abs", "csv", "dtype-struct", "lazy", "mode", "partition_by", "rle"] }
 rayon = "1.10.0"
 simple_logger = { version = "5.0.0", features = ["stderr"] }
