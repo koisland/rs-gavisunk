@@ -1,6 +1,6 @@
 use polars::prelude::*;
 
-const DEFAULT_BANDWIDTH: u64 = 2500;
+const DEFAULT_BANDWIDTH: (f64, f64) = (0.25, 0.75);
 const DEFAULT_GOOD_SUNK_THR: u64 = 1;
 
 /// Determine which read best matches a given contig based on mapped SUNK position and determine its orientation.
@@ -14,9 +14,10 @@ const DEFAULT_GOOD_SUNK_THR: u64 = 1;
 /// # Arguments
 /// * `df_read_sunk_pos`
 ///     * [`DataFrame`] of read SUNK positions with columns: `[read, rpos, chrom, cpos]`
-/// * `bandwidth`
-///     * Number of bps around median SUNK position to use in filtering SUNKs.
-///     * **A 'good' SUNK is one within this bandwidth.**
+/// * `perc_pos_range`
+///     * Percentile range that determines how to filter SUNKS.
+///         * ex. `(0.25, 0.75)`
+///     * **A 'good' SUNK is one within this band.**
 /// * `good_sunk_threshold`
 ///     * Number of 'good' SUNKs required to not filter read.
 ///
@@ -25,14 +26,14 @@ const DEFAULT_GOOD_SUNK_THR: u64 = 1;
 ///     * Has columns: `[read, chrom, sunks_within_bandwidth, ort]`
 pub fn assign_read_to_ctg_w_ort(
     df_read_sunk_pos: &DataFrame,
-    bandwidth: Option<u64>,
+    perc_pos_bounds: Option<(f64, f64)>,
     good_sunk_threshold: Option<u64>,
 ) -> eyre::Result<DataFrame> {
-    let bandwidth = bandwidth.unwrap_or(DEFAULT_BANDWIDTH);
+    let (lower_bound, upper_bound) = perc_pos_bounds.unwrap_or(DEFAULT_BANDWIDTH);
     let good_sunk_threshold = good_sunk_threshold.unwrap_or(DEFAULT_GOOD_SUNK_THR);
     let lf_read_sunk_pos = df_read_sunk_pos.clone().lazy();
 
-    log::info!("Using median SUNK bandwidth: {bandwidth}");
+    log::info!("Filtering SUNKs with an adjusted position in {lower_bound} percentile and {upper_bound} percentile.");
     log::info!("Requiring a read to have at least {good_sunk_threshold} SUNK(s) within bandwidth.");
 
     let lf_ort = df_read_sunk_pos
@@ -94,11 +95,14 @@ pub fn assign_read_to_ctg_w_ort(
                 .otherwise(col("cpos") + col("rpos"))
                 .alias("apos"),
         )
-        // Then count sunks valid sunks around median position within bandwidth.
+        // Then count sunks valid sunks where a valid sunks agg pos is > 25th perc and < 75th perc apos .
         .with_column(
-            (col("apos") - col("apos").median())
-                .abs()
-                .lt(bandwidth)
+            col("apos")
+                .lt(col("apos").quantile(lit(lower_bound), QuantileMethod::default()))
+                .and(
+                    col("apos")
+                        .lt(col("apos").quantile(lit(upper_bound), QuantileMethod::default())),
+                )
                 .sum()
                 .over(["read", "ctg"])
                 .alias("sunks_within_bandwidth"),
