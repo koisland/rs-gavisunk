@@ -67,13 +67,7 @@ fn main() -> eyre::Result<()> {
     );
 
     // TODO: Process by contig
-    create_sunk_graph(
-        &df_asm_sunks,
-        &asm_lens,
-        &df_read_sunks,
-        &ont_lens,
-        &df_bad_sunks,
-    )?;
+    create_sunk_graph(&df_read_sunks, &ont_lens, &df_bad_sunks)?;
 
     log::info!("Done.");
     Ok(())
