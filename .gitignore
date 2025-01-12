@@ -1,5 +1,6 @@
 target/
 *.csv
+*.bed
 *.tsv
 ignore/
 .vscode/

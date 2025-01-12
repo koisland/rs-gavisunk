@@ -5,6 +5,7 @@ use filter_bad_sunks::filter_bad_sunks;
 use get_kmers::get_sunk_positions;
 use io::{load_tsv, write_tsv, Fasta};
 use map_kmers::{get_good_read_sunks, map_sunks_to_reads};
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use sunk_graph::create_sunk_graph;
 
 mod assign_read_ctg;
@@ -67,8 +68,24 @@ fn main() -> eyre::Result<()> {
     );
 
     // TODO: Process by contig
-    create_sunk_graph(&df_read_sunks, &ont_lens, &df_bad_sunks)?;
-
+    log::info!("Generating SUNK graph by contig.");
+    df_read_sunks
+        .partition_by(["ctg"], true)?
+        .par_iter()
+        .for_each(|df_ctg| {
+            let ctg = df_ctg
+                .column("ctg")
+                .unwrap()
+                .str()
+                .unwrap()
+                .first()
+                .map(|ctg| ctg.to_owned())
+                .unwrap();
+            let (mut df_sunks, mut df_bed) =
+                create_sunk_graph(&ctg, &df_ctg, &ont_lens, &df_bad_sunks).unwrap();
+            write_tsv(&mut df_sunks, format!("{ctg}_sunks.tsv")).unwrap();
+            write_tsv(&mut df_bed, format!("{ctg}.bed")).unwrap();
+        });
     log::info!("Done.");
     Ok(())
 }

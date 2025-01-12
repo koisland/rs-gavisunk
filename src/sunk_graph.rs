@@ -2,15 +2,65 @@ use distmat::DistMatrix;
 use eyre::bail;
 use itertools::Itertools;
 use petgraph::graph::NodeIndex;
-use petgraph::{algo::tarjan_scc, Graph};
+use petgraph::{algo::kosaraju_scc, Graph};
 use polars::prelude::*;
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use std::collections::{HashMap, HashSet};
+use std::i64;
 use std::ops::Not;
 
 const MIN_READ_LEN: u64 = 10000;
 
-fn get_largest_sunk_graph_component(
+fn get_contig_sunk_graph_components(
+    ctg: &str,
+    rnames: &[String],
+    ids: &[i64],
+) -> eyre::Result<DataFrame> {
+    let mut reads = vec![];
+    let mut ids_1 = vec![];
+    let mut ids_2 = vec![];
+    for (read, sunks) in &rnames.iter().zip(ids.iter()).chunk_by(|a| a.0) {
+        for id_pair in sunks.map(|(_, sunk)| sunk).combinations(2) {
+            let [id_1, id_2] = id_pair[..] else {
+                continue;
+            };
+            reads.push(read);
+            ids_1.push(*id_1);
+            ids_2.push(*id_2);
+        }
+    }
+    let mut graph: Graph<i64, i64, petgraph::Undirected> = Graph::new_undirected();
+    let node_idxs: HashMap<i64, NodeIndex> =
+        ids.iter().map(|id| (*id, graph.add_node(*id))).collect();
+    for (id_1, id_2) in ids_1.iter().zip(ids_2.iter()) {
+        let (Some(n1), Some(n2)) = (node_idxs.get(id_1), node_idxs.get(id_2)) else {
+            unreachable!("ID not added to graph. Node index not found.")
+        };
+        graph.add_edge(*n1, *n2, 1);
+    }
+    let components = kosaraju_scc(&graph);
+
+    let (mut starts, mut ends, mut sunks) = (vec![], vec![], vec![]);
+    for comp in components.into_iter().filter(|nodes| nodes.len() > 2) {
+        let mut min_st = i64::MAX;
+        let mut max_end = 0;
+        for pos in comp.iter().flat_map(|n| graph.node_weight(*n)) {
+            min_st = std::cmp::min(min_st, *pos);
+            max_end = std::cmp::max(max_end, *pos);
+        }
+        starts.push(min_st);
+        ends.push(max_end);
+        sunks.push(TryInto::<u64>::try_into(comp.len())?);
+    }
+
+    Ok(DataFrame::new(vec![
+        Column::new("ctg".into(), vec![ctg; starts.len()]),
+        Column::new("st".into(), starts),
+        Column::new("end".into(), ends),
+        Column::new("sunks".into(), sunks),
+    ])?)
+}
+
+fn get_read_largest_sunk_graph_component(
     df_grp: &DataFrame,
     rname: &str,
 ) -> eyre::Result<Option<Vec<i64>>> {
@@ -160,7 +210,7 @@ fn get_largest_sunk_graph_component(
     ])?
     .lazy()
     // Drop other rows that have dupe sunks.
-    .unique_stable(
+    .unique(
         Some(vec!["id_1".into(), "id_2".into(), "is_multi_sunk".into()]),
         UniqueKeepStrategy::First,
     )
@@ -201,8 +251,8 @@ fn get_largest_sunk_graph_component(
         };
         graph.add_edge(*n1, *n2, (id_2 - id_1) - (pos_2 - pos_1));
     }
-    // Use tarjan's algo to find all connected components.
-    let components = tarjan_scc(&graph);
+    // Use kosaraju's algo to find all connected components.
+    let components = kosaraju_scc(&graph);
     // TODO: Filter components by additional heuristics?
     // See weight above.
     let Some(largest_component) = components.iter().max_by(|a, b| a.len().cmp(&b.len())) else {
@@ -220,10 +270,11 @@ fn get_largest_sunk_graph_component(
 }
 
 pub fn create_sunk_graph(
+    ctg: &str,
     df_read_sunks: &DataFrame,
     read_lens: &HashMap<String, u64>,
     df_bad_sunks: &DataFrame,
-) -> eyre::Result<()> {
+) -> eyre::Result<(DataFrame, DataFrame)> {
     let lf_read_sunks = df_read_sunks
         .clone()
         .lazy()
@@ -274,11 +325,8 @@ pub fn create_sunk_graph(
         .collect()?;
 
     let (rnames, ids): (Vec<String>, Vec<i64>) = df_sunk_pos_w_len
-        // .lazy()
-        // .filter(col("read").eq(lit("00752430-b346-4029-8e6b-5aed0ac718f6")))
-        // .collect()?
         .partition_by(["read"], true)?
-        .into_par_iter()
+        .iter()
         .flat_map(|df_grp| {
             let rname = df_grp
                 .column("read")
@@ -287,33 +335,31 @@ pub fn create_sunk_graph(
                 .unwrap()
                 .first()
                 .unwrap();
-            if let Some(ids) = get_largest_sunk_graph_component(&df_grp, rname).unwrap() {
+            if let Some(ids) = get_read_largest_sunk_graph_component(&df_grp, rname).unwrap() {
                 Some((vec![rname.to_owned(); ids.len()], ids))
             } else {
                 None
             }
         })
-        .reduce(
-            || (vec![], vec![]),
-            |(mut r1, mut p1), (mut r2, mut p2)| {
-                r1.append(&mut r2);
-                p1.append(&mut p2);
-                (r1, p1)
-            },
-        );
+        .reduce(|(mut r1, mut p1), (mut r2, mut p2)| {
+            r1.append(&mut r2);
+            p1.append(&mut p2);
+            (r1, p1)
+        })
+        .unwrap();
+
+    let df_output_bed = get_contig_sunk_graph_components(ctg, &rnames, &ids)?;
     let df_output_sunks = DataFrame::new(vec![
         Column::new("read".into(), rnames),
         Column::new("id".into(), ids),
     ])?;
 
-    println!("{:?}", df_output_sunks);
-
-    Ok(())
+    Ok((df_output_sunks, df_output_bed))
 }
 
 #[cfg(test)]
 mod test {
-    use crate::create_sunk_graph;
+    use crate::{create_sunk_graph, io::write_tsv};
     use std::{
         collections::HashMap,
         fs::File,
@@ -322,53 +368,71 @@ mod test {
 
     use itertools::Itertools;
     use polars::prelude::*;
+    use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
     // #[test]
-    // fn test_run() {
-    //     let df_read_sunks = {
-    //         let mut df = CsvReadOptions::default()
-    //             .with_has_header(false)
-    //             .with_parse_options(CsvParseOptions::default().with_separator(b'\t'))
-    //             .try_into_reader_with_file_path(Some(
-    //                 "ignore/test_graph/haplotype1-0000033_hap1.sunkpos".into(),
-    //             ))
-    //             .unwrap()
-    //             .finish()
-    //             .unwrap();
-    //         df.set_column_names(["read", "rpos", "ctg", "cpos", "group"])
-    //             .unwrap();
-    //         df
-    //     };
+    fn test_run() {
+        let df_read_sunks = {
+            let mut df = CsvReadOptions::default()
+                .with_has_header(false)
+                .with_parse_options(CsvParseOptions::default().with_separator(b'\t'))
+                .try_into_reader_with_file_path(Some(
+                    "ignore/test_graph/haplotype1-0000033_hap1.sunkpos".into(),
+                ))
+                .unwrap()
+                .finish()
+                .unwrap();
+            df.set_column_names(["read", "rpos", "ctg", "cpos", "group"])
+                .unwrap();
+            df
+        };
 
-    //     let read_lens: HashMap<String, u64> = {
-    //         let fh = File::open("ignore/test_graph/hap1.rlen").unwrap();
-    //         BufReader::new(fh)
-    //             .lines()
-    //             .flat_map(|l| {
-    //                 let line = l.unwrap();
-    //                 let Some((x, y)) = line.trim().split("\t").collect_tuple::<(&str, &str)>()
-    //                 else {
-    //                     return None;
-    //                 };
-    //                 Some((x.to_owned(), y.parse::<u64>().unwrap()))
-    //             })
-    //             .collect()
-    //     };
-    //     let df_bad_sunks: DataFrame = {
-    //         let df = CsvReadOptions::default()
-    //             .with_has_header(false)
-    //             .with_parse_options(CsvParseOptions::default().with_separator(b'\t'))
-    //             .try_into_reader_with_file_path(Some("ignore/test_graph/bad_sunks.txt".into()))
-    //             .unwrap()
-    //             .finish()
-    //             .unwrap();
-    //         df.lazy()
-    //             .with_column(lit(1).alias("count"))
-    //             .rename(["column_1"], ["id"], true)
-    //             .collect()
-    //             .unwrap()
-    //     };
+        let read_lens: HashMap<String, u64> = {
+            let fh = File::open("ignore/test_graph/hap1.rlen").unwrap();
+            BufReader::new(fh)
+                .lines()
+                .flat_map(|l| {
+                    let line = l.unwrap();
+                    let Some((x, y)) = line.trim().split("\t").collect_tuple::<(&str, &str)>()
+                    else {
+                        return None;
+                    };
+                    Some((x.to_owned(), y.parse::<u64>().unwrap()))
+                })
+                .collect()
+        };
+        let df_bad_sunks: DataFrame = {
+            let df = CsvReadOptions::default()
+                .with_has_header(false)
+                .with_parse_options(CsvParseOptions::default().with_separator(b'\t'))
+                .try_into_reader_with_file_path(Some("ignore/test_graph/bad_sunks.txt".into()))
+                .unwrap()
+                .finish()
+                .unwrap();
+            df.lazy()
+                .with_column(lit(1).alias("count"))
+                .rename(["column_1"], ["id"], true)
+                .collect()
+                .unwrap()
+        };
 
-    //     create_sunk_graph(&df_read_sunks, &read_lens, &df_bad_sunks).unwrap();
-    // }
+        df_read_sunks
+            .partition_by(["ctg"], true)
+            .unwrap()
+            .par_iter()
+            .for_each(|df_ctg| {
+                let contig = df_ctg
+                    .column("ctg")
+                    .unwrap()
+                    .str()
+                    .unwrap()
+                    .first()
+                    .map(|ctg| ctg.to_owned())
+                    .unwrap();
+                let (mut df_sunks, mut df_bed) =
+                    create_sunk_graph(&contig, &df_ctg, &read_lens, &df_bad_sunks).unwrap();
+                write_tsv(&mut df_sunks, format!("{contig}_sunks.tsv")).unwrap();
+                write_tsv(&mut df_bed, format!("{contig}.bed")).unwrap();
+            });
+    }
 }
